@@ -2522,8 +2522,10 @@ async function saveImportedPdf(buf) {
       tx.onerror = function () { reject(tx.error); };
     });
     console.log('✅ 已保存 PDF 到本地，下次打开自动加载');
+    return true;
   } catch (e) {
     console.warn('保存 PDF 到本地失败（不影响本次使用）:', e);
+    return false;
   }
 }
 
@@ -2544,7 +2546,7 @@ async function loadImportedPdf() {
 async function loadPdf(file) {
   try {
     const buf = await file.arrayBuffer();
-    saveImportedPdf(buf.slice(0)); // 复制一份再持久化（pdf.js 会 detach 原缓冲区）
+    await saveImportedPdf(buf.slice(0)); // 等待写入完成，避免刷新太快丢失
     pdfDoc = await pdfjsLib.getDocument({ data: buf }).promise;
     const savedPage = parseInt(localStorage.getItem('pdfPageNum')) || 1;
     pdfPageNum = Math.min(savedPage, pdfDoc.numPages);
