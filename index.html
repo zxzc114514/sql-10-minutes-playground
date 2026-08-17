@@ -1898,6 +1898,21 @@ async function autoLoadEmbeddedData() {
       console.log('✅ 内嵌 PDF 已自动加载');
     }
 
+    // 无内嵌 PDF 时，尝试自动加载上次导入的 PDF（IndexedDB）
+    if (typeof EMBEDDED_PDF_BASE64 === 'undefined' || !EMBEDDED_PDF_BASE64) {
+      const savedBuf = await loadImportedPdf();
+      if (savedBuf) {
+        pdfDoc = await pdfjsLib.getDocument({ data: savedBuf }).promise;
+        const savedPage = parseInt(localStorage.getItem('pdfPageNum')) || 1;
+        pdfPageNum = Math.min(savedPage, pdfDoc.numPages);
+        document.getElementById('pdfEmpty').style.display = 'none';
+        updatePdfControls();
+        zoomReset();
+        loadChapterNav();
+        console.log('✅ 已自动加载上次导入的 PDF');
+      }
+    }
+
     // 自动执行内嵌 SQL（建表 + 填充数据）
     if (typeof EMBEDDED_CREATE_SQL !== 'undefined' && EMBEDDED_CREATE_SQL &&
         typeof EMBEDDED_POPULATE_SQL !== 'undefined' && EMBEDDED_POPULATE_SQL) {
@@ -2478,9 +2493,58 @@ function handlePdfUpload(event) {
   event.target.value = '';
 }
 
+// ==================== 导入 PDF 持久化（IndexedDB） ====================
+const PDF_DB_NAME = 'sqlLearnPdf';
+const PDF_DB_STORE = 'pdf';
+const PDF_DB_KEY = 'imported';
+
+function openPdfDb() {
+  return new Promise(function (resolve, reject) {
+    if (!window.indexedDB) return reject(new Error('IndexedDB 不可用'));
+    const req = indexedDB.open(PDF_DB_NAME, 1);
+    req.onupgradeneeded = function () {
+      if (!req.result.objectStoreNames.contains(PDF_DB_STORE)) {
+        req.result.createObjectStore(PDF_DB_STORE);
+      }
+    };
+    req.onsuccess = function () { resolve(req.result); };
+    req.onerror = function () { reject(req.error); };
+  });
+}
+
+async function saveImportedPdf(buf) {
+  try {
+    const db = await openPdfDb();
+    await new Promise(function (resolve, reject) {
+      const tx = db.transaction(PDF_DB_STORE, 'readwrite');
+      tx.objectStore(PDF_DB_STORE).put(buf, PDF_DB_KEY);
+      tx.oncomplete = resolve;
+      tx.onerror = function () { reject(tx.error); };
+    });
+    console.log('✅ 已保存 PDF 到本地，下次打开自动加载');
+  } catch (e) {
+    console.warn('保存 PDF 到本地失败（不影响本次使用）:', e);
+  }
+}
+
+async function loadImportedPdf() {
+  try {
+    const db = await openPdfDb();
+    return await new Promise(function (resolve, reject) {
+      const tx = db.transaction(PDF_DB_STORE, 'readonly');
+      const req = tx.objectStore(PDF_DB_STORE).get(PDF_DB_KEY);
+      req.onsuccess = function () { resolve(req.result || null); };
+      req.onerror = function () { reject(req.error); };
+    });
+  } catch (e) {
+    return null;
+  }
+}
+
 async function loadPdf(file) {
   try {
     const buf = await file.arrayBuffer();
+    saveImportedPdf(buf.slice(0)); // 复制一份再持久化（pdf.js 会 detach 原缓冲区）
     pdfDoc = await pdfjsLib.getDocument({ data: buf }).promise;
     const savedPage = parseInt(localStorage.getItem('pdfPageNum')) || 1;
     pdfPageNum = Math.min(savedPage, pdfDoc.numPages);
